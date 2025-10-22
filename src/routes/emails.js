@@ -1,7 +1,7 @@
 const express = require('express');
 const { parseEmail, getDomain, extractSenderIP } = require('../parser');
 const { checkCTI } = require('../cti');
-const { saveEmail, getEmails } = require('../db');
+const { saveEmail, getEmails, deleteEmail, deleteEmails } = require('../db');
 
 const router = express.Router();
 
@@ -84,6 +84,47 @@ router.get('/all', async (req, res) => {
   } catch (error) {
     console.error('Error fetching emails:', error);
     res.status(500).json({ error: 'Failed to fetch emails' });
+  }
+});
+
+
+/**
+ * DELETE /api/emails/:id
+ * Delete a single email by ID
+ */
+router.delete('/:id', async (req, res) => {
+  try {
+    const id = parseInt(req.params.id);
+    if (isNaN(id)) {
+      return res.status(400).json({ error: 'Invalid ID' });
+    }
+    await deleteEmail(id);
+    res.json({ message: 'Email deleted successfully' });
+  } catch (error) {
+    console.error('Error deleting email:', error);
+    if (error.message === 'Email not found') {
+      res.status(404).json({ error: 'Email not found' });
+    } else {
+      res.status(500).json({ error: 'Failed to delete email' });
+    }
+  }
+});
+
+/**
+ * DELETE /api/emails/bulk
+ * Delete multiple emails by IDs (expects { ids: [1,2,3] } in body)
+ */
+router.delete('/bulk', async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: 'IDs must be a non-empty array' });
+    }
+    const deletedIds = await deleteEmails(ids);
+    res.json({ message: 'Emails deleted successfully', deletedIds });
+  } catch (error) {
+    console.error('Error deleting emails:', error);
+    res.status(500).json({ error: 'Failed to delete emails' });
   }
 });
 

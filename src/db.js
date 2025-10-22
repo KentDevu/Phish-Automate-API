@@ -155,9 +155,44 @@ const getEmails = async () => {
   }
 };
 
+// Delete a single email by ID
+const deleteEmail = async (id) => {
+  const query = 'DELETE FROM emails WHERE id = $1 RETURNING id;';
+  try {
+    const res = await pool.query(query, [id]);
+    if (res.rows.length > 0) {
+      console.log('Email deleted with ID:', res.rows[0].id);
+      return res.rows[0].id;
+    } else {
+      throw new Error('Email not found');
+    }
+  } catch (err) {
+    console.error('Error deleting email:', err);
+    throw err;
+  }
+};
+
+// Delete multiple emails by IDs
+const deleteEmails = async (ids) => {
+  if (!Array.isArray(ids) || ids.length === 0) {
+    throw new Error('IDs must be a non-empty array');
+  }
+  const query = 'DELETE FROM emails WHERE id = ANY($1) RETURNING id;';
+  try {
+    const res = await pool.query(query, [ids]);
+    console.log('Emails deleted with IDs:', res.rows.map(row => row.id));
+    return res.rows.map(row => row.id);
+  } catch (err) {
+    console.error('Error deleting emails:', err);
+    throw err;
+  }
+};
+
 module.exports = {
   pool,
   createTable,
   saveEmail,
-  getEmails
+  getEmails,
+  deleteEmail,
+  deleteEmails
 };

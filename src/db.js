@@ -41,7 +41,10 @@ const createTable = async () => {
     `ALTER TABLE emails ADD COLUMN IF NOT EXISTS dkim_result VARCHAR(50);`,
     `ALTER TABLE emails ADD COLUMN IF NOT EXISTS dmarc_result VARCHAR(50);`,
     `ALTER TABLE emails ADD COLUMN IF NOT EXISTS headers JSONB;`,
-    `ALTER TABLE emails ADD COLUMN IF NOT EXISTS attachment_hashes JSONB;`
+    `ALTER TABLE emails ADD COLUMN IF NOT EXISTS attachment_hashes JSONB;`,
+    `ALTER TABLE emails ADD COLUMN IF NOT EXISTS detailed_cti_analysis JSONB;`,
+    `ALTER TABLE emails ADD COLUMN IF NOT EXISTS threat_summary JSONB;`,
+    `ALTER TABLE emails ADD COLUMN IF NOT EXISTS cti_confidence VARCHAR(20);`
   ];
   for (const query of queries) {
     try {
@@ -56,8 +59,8 @@ const createTable = async () => {
 // Save email data
 const saveEmail = async (emailData) => {
   const query = `
-    INSERT INTO emails (sender, recipient, subject, body, attachments, timestamp, phishing_score_cti, cti_flags, extracted_urls, sender_domain, sender_ip, sender_name, spf_result, dkim_result, dmarc_result, headers, attachment_hashes)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+    INSERT INTO emails (sender, recipient, subject, body, attachments, timestamp, phishing_score_cti, cti_flags, extracted_urls, sender_domain, sender_ip, sender_name, spf_result, dkim_result, dmarc_result, headers, attachment_hashes, detailed_cti_analysis, threat_summary, cti_confidence)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
     RETURNING id;
   `;
   const values = [
@@ -77,7 +80,10 @@ const saveEmail = async (emailData) => {
     emailData.dkim_result,
     emailData.dmarc_result,
     JSON.stringify(emailData.headers),
-    JSON.stringify(emailData.attachment_hashes)
+    JSON.stringify(emailData.attachment_hashes),
+    JSON.stringify(emailData.detailed_analysis || {}),
+    JSON.stringify(emailData.threat_summary || {}),
+    emailData.threat_summary?.confidence || 'unknown'
   ];
   try {
     const res = await pool.query(query, values);
@@ -140,13 +146,29 @@ const getEmails = async () => {
         console.warn('Failed to parse attachment_hashes for email ID:', row.id, e);
         attachment_hashes = [];
       }
+      let detailed_analysis = {};
+      try {
+        detailed_analysis = typeof row.detailed_cti_analysis === 'string' ? JSON.parse(row.detailed_cti_analysis) : (row.detailed_cti_analysis || {});
+      } catch (e) {
+        console.warn('Failed to parse detailed_cti_analysis for email ID:', row.id, e);
+        detailed_analysis = {};
+      }
+      let threat_summary = {};
+      try {
+        threat_summary = typeof row.threat_summary === 'string' ? JSON.parse(row.threat_summary) : (row.threat_summary || {});
+      } catch (e) {
+        console.warn('Failed to parse threat_summary for email ID:', row.id, e);
+        threat_summary = {};
+      }
       return {
         ...row,
         attachments,
         cti_flags,
         extracted_urls,
         headers,
-        attachment_hashes
+        attachment_hashes,
+        detailed_analysis,
+        threat_summary
       };
     });
   } catch (err) {

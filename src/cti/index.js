@@ -42,13 +42,92 @@ function extractSenderIP(headers) {
 }
 
 /**
- * Mock CTI (Cyber Threat Intelligence) module with VirusTotal integration
+ * Analyzes VirusTotal response and extracts detailed threat intelligence
+ * @param {Object} vtResponse - VirusTotal API response
+ * @param {string} type - Type of check ('domain', 'ip', 'url')
+ * @param {string} identifier - The domain/IP/URL being checked
+ * @returns {Object} Detailed analysis results
+ */
+function analyzeVTResponse(vtResponse, type, identifier) {
+  const attributes = vtResponse.data.attributes;
+  const stats = attributes.last_analysis_stats;
+  const results = attributes.last_analysis_results || {};
+
+  // Calculate reputation score (0-100, higher is better)
+  const total = stats.malicious + stats.suspicious + stats.harmless + stats.undetected;
+  const reputationScore = total > 0 ? ((stats.harmless + stats.undetected) / total) * 100 : 50;
+
+  // Extract malicious engines
+  const maliciousEngines = Object.entries(results)
+    .filter(([engine, result]) => result.category === 'malicious')
+    .map(([engine, result]) => ({
+      engine,
+      result: result.result,
+      method: result.method
+    }));
+
+  // Extract suspicious engines
+  const suspiciousEngines = Object.entries(results)
+    .filter(([engine, result]) => result.category === 'suspicious')
+    .map(([engine, result]) => ({
+      engine,
+      result: result.result,
+      method: result.method
+    }));
+
+  // Determine threat level
+  let threatLevel = 'clean';
+  let confidence = 'low';
+  if (stats.malicious >= 3) {
+    threatLevel = 'high';
+    confidence = 'high';
+  } else if (stats.malicious >= 2) {
+    threatLevel = 'medium';
+    confidence = 'medium';
+  } else if (stats.malicious >= 1) {
+    threatLevel = 'low';
+    confidence = 'low';
+  } else if (stats.suspicious >= 2) {
+    threatLevel = 'suspicious';
+    confidence = 'low';
+  }
+
+  return {
+    identifier,
+    type,
+    stats,
+    reputation_score: Math.round(reputationScore),
+    threat_level: threatLevel,
+    confidence,
+    malicious_engines: maliciousEngines,
+    suspicious_engines: suspiciousEngines,
+    categories: attributes.categories || [],
+    tags: attributes.tags || [],
+    last_analysis_date: attributes.last_analysis_date,
+    popularity_ranks: attributes.popularity_ranks || {}
+  };
+}
+
+/**
+ * Enhanced CTI (Cyber Threat Intelligence) module with detailed VirusTotal integration
  * @param {Object} emailData - The parsed email data
- * @returns {Promise<Object>} CTI results with score and flags
+ * @returns {Promise<Object>} Detailed CTI results with comprehensive threat intelligence
  */
 async function checkCTI(emailData) {
   const flags = [];
   let score = 0.0;
+  const detailedResults = {
+    domains: {},
+    ips: {},
+    urls: {},
+    summary: {
+      total_checks: 0,
+      malicious_detections: 0,
+      suspicious_detections: 0,
+      reputation_score: 0,
+      confidence_level: 'low'
+    }
+  };
 
   // Extract URLs from body for scanning
   const urlRegex = /https?:\/\/[^\s]+/g;
@@ -83,9 +162,12 @@ async function checkCTI(emailData) {
         });
         console.log('VT domain response for URL domain', urlDomain, ':', urlDomainResponse.data);
         const urlDomainStats = urlDomainResponse.data.data.attributes.last_analysis_stats;
-        if (urlDomainStats.malicious > 0) {
+        // Be more conservative: require at least 2 malicious detections
+        if (urlDomainStats.malicious >= 2) {
           flags.push('malicious_url_domain_vt');
           score += 0.5;
+        } else if (urlDomainStats.malicious > 0) {
+          console.log('URL domain', urlDomain, 'has', urlDomainStats.malicious, 'malicious detection(s) - below threshold');
         }
       } catch (error) {
         console.error('VT URL domain error for', urlDomain, ':', error.response ? error.response.data : error.message);
@@ -100,13 +182,29 @@ async function checkCTI(emailData) {
         headers: { 'x-apikey': process.env.VT_API_KEY }
       });
       console.log('VT domain response for', domain, ':', response.data);
-      const stats = response.data.data.attributes.last_analysis_stats;
-      console.log('Domain stats for', domain, ':', stats);
-      if (stats.malicious > 0) {
-          flags.push('malicious_domain_vt');
-          score += 0.5;
-          console.log('Added malicious_domain_vt, score now:', score);
-        }      // Sequential: Extract IPs from VT domain response and check each with VT IP API
+
+      const domainAnalysis = analyzeVTResponse(response.data, 'domain', domain);
+      detailedResults.domains[domain] = domainAnalysis;
+      detailedResults.summary.total_checks++;
+
+      console.log('Domain analysis for', domain, ':', domainAnalysis);
+
+      // Update scoring based on detailed analysis
+      if (domainAnalysis.threat_level === 'high') {
+        flags.push('malicious_domain_vt');
+        score += 0.6;
+        detailedResults.summary.malicious_detections++;
+      } else if (domainAnalysis.threat_level === 'medium') {
+        flags.push('suspicious_domain_vt');
+        score += 0.4;
+        detailedResults.summary.suspicious_detections++;
+      } else if (domainAnalysis.threat_level === 'low') {
+        flags.push('low_threat_domain_vt');
+        score += 0.2;
+      }
+
+      // Add reputation score to overall calculation
+      detailedResults.summary.reputation_score += domainAnalysis.reputation_score;      // Sequential: Extract IPs from VT domain response and check each with VT IP API
       const dnsRecords = response.data.data.attributes.last_dns_records || [];
       for (const record of dnsRecords) {
         if (record.type === 'A' && record.value) {
@@ -115,12 +213,26 @@ async function checkCTI(emailData) {
               headers: { 'x-apikey': process.env.VT_API_KEY }
             });
             console.log('VT IP response for', record.value, ':', ipResponse.data);
-            const ipStats = ipResponse.data.data.attributes.last_analysis_stats;
-            if (ipStats.malicious > 0) {
-              flags.push('malicious_ip_vt');
+
+            const ipAnalysis = analyzeVTResponse(ipResponse.data, 'ip', record.value);
+            detailedResults.ips[record.value] = ipAnalysis;
+            detailedResults.summary.total_checks++;
+
+            console.log('DNS IP analysis for', record.value, ':', ipAnalysis);
+
+            // Update scoring based on detailed analysis
+            if (ipAnalysis.threat_level === 'high') {
+              flags.push('malicious_dns_ip_vt');
               score += 0.4;
-              console.log('Added malicious_ip_vt, score now:', score);
+              detailedResults.summary.malicious_detections++;
+            } else if (ipAnalysis.threat_level === 'medium') {
+              flags.push('suspicious_dns_ip_vt');
+              score += 0.2;
+              detailedResults.summary.suspicious_detections++;
             }
+
+            // Add reputation score to overall calculation
+            detailedResults.summary.reputation_score += ipAnalysis.reputation_score;
           } catch (ipError) {
             console.error('VT IP error for', record.value, ':', ipError.response ? ipError.response.data : ipError.message);
           }
@@ -135,12 +247,29 @@ async function checkCTI(emailData) {
             headers: { 'x-apikey': process.env.VT_API_KEY }
           });
           console.log('VT IP response for sender IP', senderIP, ':', senderIPResponse.data);
-          const senderIPStats = senderIPResponse.data.data.attributes.last_analysis_stats;
-          if (senderIPStats.malicious > 0) {
+
+          const ipAnalysis = analyzeVTResponse(senderIPResponse.data, 'ip', senderIP);
+          detailedResults.ips[senderIP] = ipAnalysis;
+          detailedResults.summary.total_checks++;
+
+          console.log('Sender IP analysis for', senderIP, ':', ipAnalysis);
+
+          // Update scoring based on detailed analysis
+          if (ipAnalysis.threat_level === 'high') {
             flags.push('malicious_sender_ip_vt');
-            score += 0.4;
-            console.log('Added malicious_sender_ip_vt, score now:', score);
+            score += 0.5;
+            detailedResults.summary.malicious_detections++;
+          } else if (ipAnalysis.threat_level === 'medium') {
+            flags.push('suspicious_sender_ip_vt');
+            score += 0.3;
+            detailedResults.summary.suspicious_detections++;
+          } else if (ipAnalysis.threat_level === 'low') {
+            flags.push('low_threat_sender_ip_vt');
+            score += 0.1;
           }
+
+          // Add reputation score to overall calculation
+          detailedResults.summary.reputation_score += ipAnalysis.reputation_score;
         } catch (error) {
           console.error('VT sender IP error for', senderIP, ':', error.response ? error.response.data : error.message);
         }
@@ -172,10 +301,13 @@ async function checkCTI(emailData) {
         console.log('VT URL domain response for', urlDomain, ':', response.data);
         const stats = response.data.data.attributes.last_analysis_stats;
         console.log('URL domain stats for', urlDomain, ':', stats);
-        if (stats.malicious > 0) {
+        // Be more conservative: require at least 2 malicious detections
+        if (stats.malicious >= 2) {
           flags.push('malicious_url_domain_vt');
           score += 0.5;
           console.log('Added malicious_url_domain_vt, score now:', score);
+        } else if (stats.malicious > 0) {
+          console.log('URL domain', urlDomain, 'has', stats.malicious, 'malicious detection(s) - below threshold');
         }
       } catch (error) {
         console.error('VT URL domain error for', urlDomain, ':', error.response ? error.response.data : error.message);
@@ -191,17 +323,46 @@ async function checkCTI(emailData) {
           headers: { 'x-apikey': process.env.VT_API_KEY }
         });
         console.log('VT URL IP response for', ip, ':', ipResponse.data);
-        const ipStats = ipResponse.data.data.attributes.last_analysis_stats;
-        console.log('URL IP stats for', ip, ':', ipStats);
-        if (ipStats.malicious > 0) {
+
+        const ipAnalysis = analyzeVTResponse(ipResponse.data, 'ip', ip);
+        detailedResults.ips[ip] = ipAnalysis;
+        detailedResults.summary.total_checks++;
+
+        console.log('URL IP analysis for', ip, ':', ipAnalysis);
+
+        // Update scoring based on detailed analysis
+        if (ipAnalysis.threat_level === 'high') {
           flags.push('malicious_url_ip_vt');
           score += 0.4;
-          console.log('Added malicious_url_ip_vt, score now:', score);
+          detailedResults.summary.malicious_detections++;
+        } else if (ipAnalysis.threat_level === 'medium') {
+          flags.push('suspicious_url_ip_vt');
+          score += 0.2;
+          detailedResults.summary.suspicious_detections++;
         }
+
+        // Add reputation score to overall calculation
+        detailedResults.summary.reputation_score += ipAnalysis.reputation_score;
       } catch (ipError) {
         console.error('VT URL IP error for', ip, ':', ipError.response ? ipError.response.data : ipError.message);
       }
     }
+  }
+
+  // Calculate final summary metrics
+  if (detailedResults.summary.total_checks > 0) {
+    detailedResults.summary.reputation_score = Math.round(
+      detailedResults.summary.reputation_score / detailedResults.summary.total_checks
+    );
+  }
+
+  // Determine overall confidence level
+  if (detailedResults.summary.malicious_detections >= 2) {
+    detailedResults.summary.confidence_level = 'high';
+  } else if (detailedResults.summary.malicious_detections >= 1 || detailedResults.summary.suspicious_detections >= 3) {
+    detailedResults.summary.confidence_level = 'medium';
+  } else if (detailedResults.summary.suspicious_detections >= 1) {
+    detailedResults.summary.confidence_level = 'low';
   }
 
   // Cap score at 1.0
@@ -209,7 +370,16 @@ async function checkCTI(emailData) {
 
   return {
     phishing_score_cti: score,
-    cti_flags: flags
+    cti_flags: flags,
+    detailed_analysis: detailedResults,
+    threat_summary: {
+      overall_risk: score >= 0.7 ? 'high' : score >= 0.4 ? 'medium' : 'low',
+      confidence: detailedResults.summary.confidence_level,
+      total_analyzed: detailedResults.summary.total_checks,
+      malicious_found: detailedResults.summary.malicious_detections,
+      suspicious_found: detailedResults.summary.suspicious_detections,
+      average_reputation: detailedResults.summary.reputation_score
+    }
   };
 }
 

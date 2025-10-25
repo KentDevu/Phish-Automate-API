@@ -7,7 +7,7 @@ This API provides comprehensive email analysis for phishing detection, integrati
 ## Base URL
 
 ```
-http://localhost:3000/api
+https://phishing-detection-api.kentharold.space/api/emails
 ```
 
 ## Authentication
@@ -18,7 +18,49 @@ No authentication required for basic usage. VirusTotal API key is required for C
 
 ### POST /emails
 
-Processes raw email data and returns analyzed results with threat intelligence.
+#### POST /emails (n8n IMAP integration)
+
+Use n8n's IMAP trigger or IMAP node to forward messages directly to this endpoint. The API accepts n8n HTTP Request format with a `body` wrapper and a `binary` object for attachments.
+
+Recommended n8n flow:
+1. IMAP Trigger / IMAP Email node -> emits message fields and binary attachments.
+2. (Optional) Set or Function node to normalize fields into the expected shape.
+3. HTTP Request node:
+  - Method: POST
+  - URL: https://phishing-detection-api.kentharold.space/api/emails
+  - Headers: Content-Type: application/json
+  - Enable "Send Binary Data"
+  - Send Body: Raw JSON (use expressions to populate fields)
+
+Example payload shape (use n8n expressions to inject values):
+
+```json
+{
+  "body": {
+   "rawEmail": {
+    "headers": {{$json["headers"]}},
+    "html": {{$json["html"]}},
+    "text": {{$json["text"]}},
+    "subject": "={{$json[\"subject\"]}}",
+    "attachments": {{$json["attachments"] || []}}
+   }
+  },
+  "binary": {
+   "attachment1": {
+    "data": "={{$binary[\"attachment_1\"].data}}",
+    "fileName": "={{$binary[\"attachment_1\"].fileName}}",
+    "mimeType": "={{$binary[\"attachment_1\"].mimeType}}"
+   }
+  }
+}
+```
+
+Notes and tips:
+- Use the IMAP Trigger to process incoming mail automatically or poll with the IMAP node for batches.
+- If multiple attachments exist, include them under `binary` with unique keys (attachment1, attachment2, ...).
+- If you prefer a simple JSON body, map `rawEmail` to a single string containing the full RFC822 message.
+- Ensure "Send Binary Data" is enabled in the HTTP Request node so attachments are transmitted correctly.
+- The API will parse the provided headers, text/html, and binary attachments to produce parsed email fields and CTI analysis.
 
 #### Request Formats
 
@@ -139,7 +181,8 @@ Returns a JSON object (or array for batch requests) containing parsed email data
 **Error Response (400/500):**
 ```json
 {
-  "error": "Invalid request format. Send raw email string or JSON with rawEmail field(s)"
+  "error": "Invalid request format. Send raw email string or JSON with rawEmail field(s)",
+  "details": "Additional error details here"
 }
 ```
 
@@ -238,14 +281,7 @@ GET /api/emails/all?threat_level=high&has_attachments=true&start_date=2023-01-01
     "recipient": "recipient@example.com",
     "subject": "Test Email",
     "body": "Email body content...",
-    "attachments": [
-      {
-        "filename": "document.pdf",
-        "contentType": "application/pdf",
-        "size": 12345,
-        "content": "base64encodedcontent..."
-      }
-    ],
+    "attachments": ["document.pdf", "attachment2.jpg"],
     "timestamp": "2023-01-01T12:00:00.000Z",
     "phishing_score_cti": 0.85,
     "cti_flags": ["suspicious_sender", "malicious_url"],
@@ -262,16 +298,39 @@ GET /api/emails/all?threat_level=high&has_attachments=true&start_date=2023-01-01
     },
     "attachment_hashes": ["sha256:abc123..."],
     "detailed_analysis": {
-      "virustotal": {
-        "positives": 5,
-        "total": 70,
-        "scans": {...}
+      "domains": {
+        "example.com": {
+          "identifier": "example.com",
+          "type": "domain",
+          "stats": {"malicious": 5, "suspicious": 2, "harmless": 60, "undetected": 10},
+          "reputation_score": 85,
+          "threat_level": "high",
+          "confidence": "high",
+          "malicious_engines": [{"engine": "Engine1", "result": "malicious"}],
+          "suspicious_engines": [],
+          "categories": ["phishing"],
+          "tags": ["suspicious"],
+          "last_analysis_date": "2023-10-24T09:00:00Z",
+          "popularity_ranks": {}
+        }
+      },
+      "ips": {},
+      "urls": {},
+      "summary": {
+        "total_checks": 1,
+        "malicious_detections": 1,
+        "suspicious_detections": 0,
+        "reputation_score": 85,
+        "confidence_level": "high"
       }
     },
     "threat_summary": {
-      "level": "high",
+      "overall_risk": "high",
       "confidence": "high",
-      "indicators": ["suspicious_domain", "malicious_attachment"]
+      "total_analyzed": 2,
+      "malicious_found": 1,
+      "suspicious_found": 1,
+      "average_reputation": 30
     }
   }
 ]
@@ -313,6 +372,13 @@ DELETE /api/emails/123
 }
 ```
 
+**Error Response (500):**
+```json
+{
+  "error": "Failed to delete email"
+}
+```
+
 ### DELETE /emails/bulk
 
 Deletes multiple emails by IDs.
@@ -345,6 +411,13 @@ Content-Type: application/json
 ```json
 {
   "error": "IDs must be a non-empty array"
+}
+```
+
+**Error Response (500):**
+```json
+{
+  "error": "Failed to delete emails"
 }
 ```
 

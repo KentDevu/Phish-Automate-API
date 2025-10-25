@@ -7,7 +7,7 @@ This document details the database operations for managing processed emails in t
 ## Base URL
 
 ```
-http://localhost:3000/api/emails
+https://phishing-detection-api.kentharold.space/api/emails
 ```
 
 ## Endpoints
@@ -94,37 +94,57 @@ GET /api/emails/all?subject=password
     "detailed_analysis": {
       "domains": {
         "phishingsite.com": {
-          "threat_level": "high",
+          "identifier": "phishingsite.com",
+          "type": "domain",
+          "stats": {"malicious": 5, "suspicious": 2, "harmless": 60, "undetected": 10},
           "reputation_score": 8,
+          "threat_level": "high",
+          "confidence": "high",
           "malicious_engines": [
-            "Malwarebytes",
-            "Kaspersky",
-            "ESET-NOD32",
-            "Fortinet",
-            "Sophos"
+            {"engine": "Malwarebytes", "result": "malicious", "method": "blacklist"},
+            {"engine": "Kaspersky", "result": "malicious", "method": "blacklist"}
           ],
-          "total_engines": 92,
-          "last_analysis": "2023-10-24T14:25:00Z"
+          "suspicious_engines": [
+            {"engine": "SomeEngine", "result": "suspicious", "method": "heuristic"}
+          ],
+          "categories": ["phishing", "malware"],
+          "tags": ["suspicious", "malicious"],
+          "last_analysis_date": "2023-10-24T14:25:00Z",
+          "popularity_ranks": {"Alexa": {"rank": 1000000}}
         },
         "legitimate-bank.com": {
-          "threat_level": "clean",
+          "identifier": "legitimate-bank.com",
+          "type": "domain",
+          "stats": {"malicious": 0, "suspicious": 0, "harmless": 85, "undetected": 7},
           "reputation_score": 95,
+          "threat_level": "clean",
+          "confidence": "high",
           "malicious_engines": [],
-          "total_engines": 92,
-          "last_analysis": "2023-10-24T14:25:00Z"
+          "suspicious_engines": [],
+          "categories": ["business", "finance"],
+          "tags": [],
+          "last_analysis_date": "2023-10-24T14:25:00Z",
+          "popularity_ranks": {"Alexa": {"rank": 1000}}
         }
       },
       "ips": {
         "192.168.1.100": {
-          "threat_level": "high",
+          "identifier": "192.168.1.100",
+          "type": "ip",
+          "stats": {"malicious": 3, "suspicious": 1, "harmless": 70, "undetected": 15},
           "reputation_score": 5,
+          "threat_level": "high",
+          "confidence": "medium",
           "malicious_engines": [
-            "Spamhaus",
-            "AbuseIPDB",
-            "Blocklist.de"
+            {"engine": "AbuseIPDB", "result": "malicious", "method": "blacklist"}
           ],
-          "total_engines": 85,
-          "last_analysis": "2023-10-24T14:25:00Z"
+          "suspicious_engines": [
+            {"engine": "SomeEngine", "result": "suspicious", "method": "heuristic"}
+          ],
+          "categories": ["malware"],
+          "tags": ["botnet"],
+          "last_analysis_date": "2023-10-24T14:25:00Z",
+          "popularity_ranks": {}
         }
       },
       "urls": {},

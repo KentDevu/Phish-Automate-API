@@ -96,10 +96,83 @@ const saveEmail = async (emailData) => {
 };
 
 // Get all emails
-const getEmails = async () => {
-  const query = 'SELECT * FROM emails ORDER BY timestamp DESC;';
+const getEmails = async (filters = {}) => {
+  let query = 'SELECT * FROM emails';
+  const conditions = [];
+  const values = [];
+  let paramIndex = 1;
+
+  // Build WHERE conditions based on filters
+  if (filters.sender) {
+    conditions.push(`sender ILIKE $${paramIndex}`);
+    values.push(`%${filters.sender}%`);
+    paramIndex++;
+  }
+
+  if (filters.subject) {
+    conditions.push(`subject ILIKE $${paramIndex}`);
+    values.push(`%${filters.subject}%`);
+    paramIndex++;
+  }
+
+  if (filters.sender_domain) {
+    conditions.push(`sender_domain = $${paramIndex}`);
+    values.push(filters.sender_domain);
+    paramIndex++;
+  }
+
+  if (filters.threat_level) {
+    if (filters.threat_level === 'low') {
+      conditions.push(`(phishing_score_cti < 0.4 OR phishing_score_cti IS NULL)`);
+    } else if (filters.threat_level === 'medium') {
+      conditions.push(`phishing_score_cti >= 0.4 AND phishing_score_cti < 0.7`);
+    } else if (filters.threat_level === 'high') {
+      conditions.push(`phishing_score_cti >= 0.7`);
+    } else if (filters.threat_level === 'critical') {
+      conditions.push(`phishing_score_cti >= 0.9`);
+    } else {
+      // For any other value, do exact match on the score if it's a number
+      const score = parseFloat(filters.threat_level);
+      if (!isNaN(score)) {
+        conditions.push(`phishing_score_cti = $${paramIndex}`);
+        values.push(score);
+        paramIndex++;
+      }
+    }
+  }
+
+  if (filters.cti_confidence) {
+    conditions.push(`cti_confidence = $${paramIndex}`);
+    values.push(filters.cti_confidence);
+    paramIndex++;
+  }
+
+  if (filters.start_date) {
+    conditions.push(`timestamp >= $${paramIndex}`);
+    values.push(filters.start_date);
+    paramIndex++;
+  }
+
+  if (filters.end_date) {
+    conditions.push(`timestamp <= $${paramIndex}`);
+    values.push(filters.end_date);
+    paramIndex++;
+  }
+
+  if (filters.has_attachments === 'true') {
+    conditions.push(`jsonb_array_length(attachments) > 0`);
+  } else if (filters.has_attachments === 'false') {
+    conditions.push(`(attachments IS NULL OR jsonb_array_length(attachments) = 0)`);
+  }
+
+  if (conditions.length > 0) {
+    query += ' WHERE ' + conditions.join(' AND ');
+  }
+
+  query += ' ORDER BY timestamp DESC;';
+
   try {
-    const res = await pool.query(query);
+    const res = await pool.query(query, values);
     return res.rows.map(row => {
       let attachments = [];
       try {

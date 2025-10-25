@@ -75,11 +75,30 @@ router.post('/', async (req, res) => {
 
 /**
  * GET /api/emails/all
- * Retrieve all processed emails from the database (alternative route)
+ * Retrieve all processed emails from the database with optional filtering
+ * Query parameters:
+ * - sender: Filter by sender email (partial match)
+ * - subject: Filter by subject (partial match)
+ * - sender_domain: Filter by sender domain (exact match)
+ * - threat_level: Filter by threat level (exact match)
+ * - cti_confidence: Filter by CTI confidence (exact match)
+ * - start_date: Filter emails from this date onwards (ISO format)
+ * - end_date: Filter emails up to this date (ISO format)
+ * - has_attachments: Filter by attachment presence ('true' or 'false')
  */
 router.get('/all', async (req, res) => {
   try {
-    const emails = await getEmails();
+    const filters = {};
+    if (req.query.sender) filters.sender = req.query.sender;
+    if (req.query.subject) filters.subject = req.query.subject;
+    if (req.query.sender_domain) filters.sender_domain = req.query.sender_domain;
+    if (req.query.threat_level) filters.threat_level = req.query.threat_level;
+    if (req.query.cti_confidence) filters.cti_confidence = req.query.cti_confidence;
+    if (req.query.start_date) filters.start_date = req.query.start_date;
+    if (req.query.end_date) filters.end_date = req.query.end_date;
+    if (req.query.has_attachments) filters.has_attachments = req.query.has_attachments;
+
+    const emails = await getEmails(filters);
     res.json(emails);
   } catch (error) {
     console.error('Error fetching emails:', error);

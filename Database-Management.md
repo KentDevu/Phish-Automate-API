@@ -502,6 +502,122 @@ def cleanup_old_emails(threshold_days=30):
 cleanup_old_emails()
 ```
 
+---
+
+## Blocked Senders Management
+
+### POST /block
+
+Blocks a sender email address to prevent future emails from that sender.
+
+#### Request
+
+```
+POST /api/emails/block
+Content-Type: application/json
+
+{
+  "sender_email": "malicious@example.com",
+  "reason": "High phishing score",
+  "blocked_by": "admin"
+}
+```
+
+**Body Parameters:**
+- `sender_email` (string, required): Email address to block
+- `reason` (string, optional): Reason for blocking (default: "Manual block")
+- `blocked_by` (string, optional): Who blocked the sender (default: "system")
+
+#### Response
+
+**Success Response (200):**
+```json
+{
+  "message": "Sender blocked successfully",
+  "id": 1
+}
+```
+
+**Already Blocked Response (200):**
+```json
+{
+  "message": "Sender was already blocked"
+}
+```
+
+### GET /blocked
+
+Retrieves all blocked sender email addresses.
+
+#### Request
+
+```
+GET /api/emails/blocked
+```
+
+#### Response
+
+**Success Response (200):**
+```json
+[
+  {
+    "id": 1,
+    "sender_email": "malicious@example.com",
+    "reason": "High phishing score",
+    "blocked_by": "admin",
+    "blocked_at": "2023-10-25T10:00:00.000Z"
+  },
+  {
+    "id": 2,
+    "sender_email": "spam@domain.com",
+    "reason": "Spam complaints",
+    "blocked_by": "system",
+    "blocked_at": "2023-10-25T09:30:00.000Z"
+  }
+]
+```
+
+### GET /blocked/:email
+
+Checks if a specific sender email address is blocked.
+
+#### Request
+
+```
+GET /api/emails/blocked/malicious@example.com
+```
+
+#### Response
+
+**Success Response (200):**
+```json
+{
+  "email": "malicious@example.com",
+  "is_blocked": true
+}
+```
+
+### DELETE /blocked/:email
+
+Unblocks a previously blocked sender email address.
+
+#### Request
+
+```
+DELETE /api/emails/blocked/malicious@example.com
+```
+
+#### Response
+
+**Success Response (200):**
+```json
+{
+  "message": "Sender unblocked successfully"
+}
+```
+
+---
+
 ## Error Handling
 
 ### Common Error Scenarios

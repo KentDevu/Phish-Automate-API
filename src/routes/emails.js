@@ -1,7 +1,7 @@
 const express = require('express');
 const { parseEmail, getDomain, extractSenderIP } = require('../parser');
 const { checkCTI } = require('../cti');
-const { saveEmail, getEmails, deleteEmail, deleteEmails } = require('../db');
+const { saveEmail, getEmails, deleteEmail, deleteEmails, blockSender, getBlockedSenders, isSenderBlocked, unblockSender } = require('../db');
 
 const router = express.Router();
 
@@ -144,6 +144,78 @@ router.delete('/bulk', async (req, res) => {
   } catch (error) {
     console.error('Error deleting emails:', error);
     res.status(500).json({ error: 'Failed to delete emails' });
+  }
+});
+
+/**
+ * POST /api/emails/block
+ * Block a sender email address
+ */
+router.post('/block', async (req, res) => {
+  try {
+    const { sender_email, reason, blocked_by } = req.body;
+
+    if (!sender_email) {
+      return res.status(400).json({ error: 'sender_email is required' });
+    }
+
+    const id = await blockSender(sender_email, reason, blocked_by);
+    if (id) {
+      res.json({ message: 'Sender blocked successfully', id });
+    } else {
+      res.json({ message: 'Sender was already blocked' });
+    }
+  } catch (error) {
+    console.error('Error blocking sender:', error);
+    res.status(500).json({ error: 'Failed to block sender' });
+  }
+});
+
+/**
+ * GET /api/emails/blocked
+ * Get all blocked sender emails
+ */
+router.get('/blocked', async (req, res) => {
+  try {
+    const blockedSenders = await getBlockedSenders();
+    res.json(blockedSenders);
+  } catch (error) {
+    console.error('Error fetching blocked senders:', error);
+    res.status(500).json({ error: 'Failed to fetch blocked senders' });
+  }
+});
+
+/**
+ * GET /api/emails/blocked/:email
+ * Check if a specific sender email is blocked
+ */
+router.get('/blocked/:email', async (req, res) => {
+  try {
+    const email = req.params.email;
+    const isBlocked = await isSenderBlocked(email);
+    res.json({ email, is_blocked: isBlocked });
+  } catch (error) {
+    console.error('Error checking sender block status:', error);
+    res.status(500).json({ error: 'Failed to check sender block status' });
+  }
+});
+
+/**
+ * DELETE /api/emails/blocked/:email
+ * Unblock a sender email address
+ */
+router.delete('/blocked/:senderemail', async (req, res) => {
+  try {
+    const email = req.params.email;
+    await unblockSender(email);
+    res.json({ message: 'Sender unblocked successfully' });
+  } catch (error) {
+    console.error('Error unblocking sender:', error);
+    if (error.message === 'Sender not found in blocked list') {
+      res.status(404).json({ error: 'Sender not found in blocked list' });
+    } else {
+      res.status(500).json({ error: 'Failed to unblock sender' });
+    }
   }
 });
 

@@ -44,7 +44,14 @@ const createTable = async () => {
     `ALTER TABLE emails ADD COLUMN IF NOT EXISTS attachment_hashes JSONB;`,
     `ALTER TABLE emails ADD COLUMN IF NOT EXISTS detailed_cti_analysis JSONB;`,
     `ALTER TABLE emails ADD COLUMN IF NOT EXISTS threat_summary JSONB;`,
-    `ALTER TABLE emails ADD COLUMN IF NOT EXISTS cti_confidence VARCHAR(20);`
+    `ALTER TABLE emails ADD COLUMN IF NOT EXISTS cti_confidence VARCHAR(20);`,
+    `CREATE TABLE IF NOT EXISTS blocked_senders (
+      id SERIAL PRIMARY KEY,
+      sender_email VARCHAR(255) UNIQUE NOT NULL,
+      reason TEXT,
+      blocked_by VARCHAR(255) DEFAULT 'system',
+      blocked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );`
   ];
   for (const query of queries) {
     try {
@@ -283,11 +290,80 @@ const deleteEmails = async (ids) => {
   }
 };
 
+// Block a sender email
+const blockSender = async (senderEmail, reason = 'Manual block', blockedBy = 'system') => {
+  const query = `
+    INSERT INTO blocked_senders (sender_email, reason, blocked_by)
+    VALUES ($1, $2, $3)
+    ON CONFLICT (sender_email) DO NOTHING
+    RETURNING id;
+  `;
+  const values = [senderEmail, reason, blockedBy];
+  try {
+    const res = await pool.query(query, values);
+    if (res.rows.length > 0) {
+      console.log('Sender blocked with ID:', res.rows[0].id);
+      return res.rows[0].id;
+    } else {
+      console.log('Sender already blocked:', senderEmail);
+      return null; // Already exists
+    }
+  } catch (err) {
+    console.error('Error blocking sender:', err);
+    throw err;
+  }
+};
+
+// Get all blocked senders
+const getBlockedSenders = async () => {
+  const query = 'SELECT * FROM blocked_senders ORDER BY blocked_at DESC;';
+  try {
+    const res = await pool.query(query);
+    return res.rows;
+  } catch (err) {
+    console.error('Error fetching blocked senders:', err);
+    throw err;
+  }
+};
+
+// Check if a sender is blocked
+const isSenderBlocked = async (senderEmail) => {
+  const query = 'SELECT id FROM blocked_senders WHERE sender_email = $1;';
+  try {
+    const res = await pool.query(query, [senderEmail]);
+    return res.rows.length > 0;
+  } catch (err) {
+    console.error('Error checking if sender is blocked:', err);
+    throw err;
+  }
+};
+
+// Unblock a sender
+const unblockSender = async (senderEmail) => {
+  const query = 'DELETE FROM blocked_senders WHERE sender_email = $1 RETURNING id;';
+  try {
+    const res = await pool.query(query, [senderEmail]);
+    if (res.rows.length > 0) {
+      console.log('Sender unblocked with ID:', res.rows[0].id);
+      return res.rows[0].id;
+    } else {
+      throw new Error('Sender not found in blocked list');
+    }
+  } catch (err) {
+    console.error('Error unblocking sender:', err);
+    throw err;
+  }
+};
+
 module.exports = {
   pool,
   createTable,
   saveEmail,
   getEmails,
   deleteEmail,
-  deleteEmails
+  deleteEmails,
+  blockSender,
+  getBlockedSenders,
+  isSenderBlocked,
+  unblockSender
 };

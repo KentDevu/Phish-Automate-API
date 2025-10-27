@@ -421,7 +421,165 @@ Content-Type: application/json
 }
 ```
 
-## Threat Intelligence Integration
+### POST /emails/block
+
+Blocks a sender email address to prevent future emails from that sender.
+
+#### Request
+
+```
+POST /api/emails/block
+Content-Type: application/json
+
+{
+  "sender_email": "malicious@example.com",
+  "reason": "High phishing score",
+  "blocked_by": "admin"
+}
+```
+
+**Body Parameters:**
+- `sender_email` (string, required): Email address to block
+- `reason` (string, optional): Reason for blocking (default: "Manual block")
+- `blocked_by` (string, optional): Who blocked the sender (default: "system")
+
+#### Response
+
+**Success Response (200):**
+```json
+{
+  "message": "Sender blocked successfully",
+  "id": 1
+}
+```
+
+**Already Blocked Response (200):**
+```json
+{
+  "message": "Sender was already blocked"
+}
+```
+
+**Error Response (400):**
+```json
+{
+  "error": "sender_email is required"
+}
+```
+
+**Error Response (500):**
+```json
+{
+  "error": "Failed to block sender"
+}
+```
+
+### GET /emails/blocked
+
+Retrieves all blocked sender email addresses.
+
+#### Request
+
+```
+GET /api/emails/blocked
+```
+
+#### Response
+
+**Success Response (200):**
+```json
+[
+  {
+    "id": 1,
+    "sender_email": "malicious@example.com",
+    "reason": "High phishing score",
+    "blocked_by": "admin",
+    "blocked_at": "2023-10-25T10:00:00.000Z"
+  },
+  {
+    "id": 2,
+    "sender_email": "spam@domain.com",
+    "reason": "Spam complaints",
+    "blocked_by": "system",
+    "blocked_at": "2023-10-25T09:30:00.000Z"
+  }
+]
+```
+
+**Error Response (500):**
+```json
+{
+  "error": "Failed to fetch blocked senders"
+}
+```
+
+### GET /emails/blocked/:email
+
+Checks if a specific sender email address is blocked.
+
+#### Request
+
+```
+GET /api/emails/blocked/malicious@example.com
+```
+
+**Path Parameters:**
+- `email` (string): Email address to check
+
+#### Response
+
+**Success Response (200):**
+```json
+{
+  "email": "malicious@example.com",
+  "is_blocked": true
+}
+```
+
+**Error Response (500):**
+```json
+{
+  "error": "Failed to check sender block status"
+}
+```
+
+### DELETE /emails/blocked/:email
+
+Unblocks a previously blocked sender email address.
+
+#### Request
+
+```
+DELETE /api/emails/blocked/malicious@example.com
+```
+
+**Path Parameters:**
+- `email` (string): Email address to unblock
+
+#### Response
+
+**Success Response (200):**
+```json
+{
+  "message": "Sender unblocked successfully"
+}
+```
+
+**Error Response (404):**
+```json
+{
+  "error": "Sender not found in blocked list"
+}
+```
+
+**Error Response (500):**
+```json
+{
+  "error": "Failed to unblock sender"
+}
+```
+
+## Error Handling
 
 The API integrates with VirusTotal for comprehensive threat analysis:
 
@@ -477,11 +635,43 @@ if result.get('threat_summary', {}).get('overall_risk') == 'high':
 
 ### n8n Integration
 
+#### Email Processing Workflow:
 Use the HTTP Request node with:
 - Method: POST
 - URL: `http://localhost:3000/api/emails`
 - Body: Pass email data in the supported format
 - Use the response for workflow decisions based on `threat_summary.overall_risk`
+
+#### Blocked Sender Workflow:
+For automated email blocking workflows:
+
+1. **Check if Sender is Blocked**:
+   - Method: GET
+   - URL: `http://localhost:3000/api/blocked/{sender_email}`
+   - Use IF node: If response status is 200, sender is blocked
+   - If blocked, apply "Blocked" label and skip further processing
+
+2. **Block Sender if High Risk**:
+   - After CTI analysis, if `threat_summary.overall_risk` is "high"
+   - Method: POST
+   - URL: `http://localhost:3000/api/block`
+   - Body: `{"email": "{sender_email}", "reason": "High risk detected by CTI analysis"}`
+
+3. **Retrieve All Blocked Senders**:
+   - Method: GET
+   - URL: `http://localhost:3000/api/blocked`
+   - Use for bulk operations or reporting
+
+4. **Unblock Sender Workflow**:
+  - Method: DELETE
+  - URL: `http://localhost:3000/api/blocked/{sender_email}`
+  - Use for manual unblocking or automated workflows (e.g., if risk level decreases after re-analysis)
+  - Check response: If 200, sender unblocked; if 404, sender not blocked
+
+#### Complete n8n Workflow Example:
+```
+IMAP Email → HTTP Request (Check Blocked) → IF (Not Blocked) → HTTP Request (Process Email) → IF (High Risk) → HTTP Request (Block Sender) → Gmail (Apply Label)
+```
 
 ## Error Handling
 

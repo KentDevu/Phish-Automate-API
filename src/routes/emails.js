@@ -1,7 +1,7 @@
 const express = require('express');
 const { parseEmail, getDomain, extractSenderIP } = require('../parser');
 const { checkCTI } = require('../cti');
-const { saveEmail, getEmails, deleteEmail, deleteEmails, blockSender, getBlockedSenders, isSenderBlocked, unblockSender } = require('../db');
+const { saveEmail, getEmails, deleteEmail, deleteEmails, blockSender, getBlockedSenders, isSenderBlocked, unblockSender, getEmailIntelligence } = require('../db');
 
 const router = express.Router();
 
@@ -98,11 +98,107 @@ router.get('/all', async (req, res) => {
     if (req.query.end_date) filters.end_date = req.query.end_date;
     if (req.query.has_attachments) filters.has_attachments = req.query.has_attachments;
 
-    const emails = await getEmails(filters);
-    res.json(emails);
+    // Pagination options
+    const options = {
+      limit: req.query.limit ? parseInt(req.query.limit) : 50,
+      offset: req.query.offset ? parseInt(req.query.offset) : 0,
+      fields: req.query.fields ? req.query.fields.split(',') : null
+    };
+
+    // Validate pagination parameters
+    if (options.limit < 1 || options.limit > 1000) {
+      return res.status(400).json({ error: 'Limit must be between 1 and 1000' });
+    }
+    if (options.offset < 0) {
+      return res.status(400).json({ error: 'Offset must be non-negative' });
+    }
+
+    const result = await getEmails(filters, options);
+    res.json(result);
   } catch (error) {
     console.error('Error fetching emails:', error);
     res.status(500).json({ error: 'Failed to fetch emails' });
+  }
+});
+
+
+/**
+ * GET /api/emails/summary
+ * Get a lightweight summary of emails for listing (faster than /all)
+ * Supports pagination and filtering
+ * Query parameters: limit, offset, sender, subject, sender_domain, threat_level, cti_confidence, start_date, end_date, has_attachments
+ */
+router.get('/summary', async (req, res) => {
+  try {
+    const filters = {};
+    if (req.query.sender) filters.sender = req.query.sender;
+    if (req.query.subject) filters.subject = req.query.subject;
+    if (req.query.sender_domain) filters.sender_domain = req.query.sender_domain;
+    if (req.query.threat_level) filters.threat_level = req.query.threat_level;
+    if (req.query.cti_confidence) filters.cti_confidence = req.query.cti_confidence;
+    if (req.query.start_date) filters.start_date = req.query.start_date;
+    if (req.query.end_date) filters.end_date = req.query.end_date;
+    if (req.query.has_attachments) filters.has_attachments = req.query.has_attachments;
+
+    // Pagination options with summary fields only
+    const options = {
+      limit: req.query.limit ? parseInt(req.query.limit) : 50,
+      offset: req.query.offset ? parseInt(req.query.offset) : 0,
+      fields: ['id', 'sender', 'subject', 'timestamp', 'phishing_score_cti', 'threat_summary', 'cti_confidence', 'sender_domain']
+    };
+
+    // Validate pagination parameters
+    if (options.limit < 1 || options.limit > 1000) {
+      return res.status(400).json({ error: 'Limit must be between 1 and 1000' });
+    }
+    if (options.offset < 0) {
+      return res.status(400).json({ error: 'Offset must be non-negative' });
+    }
+
+    const result = await getEmails(filters, options);
+    res.json(result);
+  } catch (error) {
+    console.error('Error fetching email summaries:', error);
+    res.status(500).json({ error: 'Failed to fetch email summaries' });
+  }
+});
+
+
+/**
+ * GET /api/emails/intelligence
+ * Get aggregated email intelligence data grouped by sender
+ * Query parameters: limit, offset, sender_domain, start_date, end_date, blocked (all/blocked/non-blocked)
+ */
+router.get('/intelligence', async (req, res) => {
+  try {
+    const filters = {};
+    if (req.query.sender_domain) filters.sender_domain = req.query.sender_domain;
+    if (req.query.start_date) filters.start_date = req.query.start_date;
+    if (req.query.end_date) filters.end_date = req.query.end_date;
+
+    // Pagination and filtering options
+    const options = {
+      limit: req.query.limit ? parseInt(req.query.limit) : 50,
+      offset: req.query.offset ? parseInt(req.query.offset) : 0,
+      blockedFilter: req.query.blocked || 'all' // 'all', 'blocked', 'non-blocked'
+    };
+
+    // Validate parameters
+    if (options.limit < 1 || options.limit > 1000) {
+      return res.status(400).json({ error: 'Limit must be between 1 and 1000' });
+    }
+    if (options.offset < 0) {
+      return res.status(400).json({ error: 'Offset must be non-negative' });
+    }
+    if (!['all', 'blocked', 'non-blocked'].includes(options.blockedFilter)) {
+      return res.status(400).json({ error: 'Blocked filter must be one of: all, blocked, non-blocked' });
+    }
+
+    const result = await getEmailIntelligence(filters, options);
+    res.json(result);
+  } catch (error) {
+    console.error('Error fetching email intelligence:', error);
+    res.status(500).json({ error: 'Failed to fetch email intelligence' });
   }
 });
 
@@ -191,7 +287,7 @@ router.get('/blocked', async (req, res) => {
  */
 router.get('/blocked/:email', async (req, res) => {
   try {
-    const email = req.params.email;
+    const email = decodeURIComponent(req.params.email);
     const isBlocked = await isSenderBlocked(email);
     res.json({ email, is_blocked: isBlocked });
   } catch (error) {
@@ -201,12 +297,12 @@ router.get('/blocked/:email', async (req, res) => {
 });
 
 /**
- * DELETE /api/emails/blocked/:email
+ * DELETE /api/emails/blocked/:senderemail
  * Unblock a sender email address
  */
 router.delete('/blocked/:senderemail', async (req, res) => {
   try {
-    const email = req.params.email;
+    const email = decodeURIComponent(req.params.senderemail);
     await unblockSender(email);
     res.json({ message: 'Sender unblocked successfully' });
   } catch (error) {

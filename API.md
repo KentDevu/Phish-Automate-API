@@ -230,12 +230,20 @@ GET /api/emails/all
 - `start_date` (string): Filter emails from this date onwards (ISO 8601 format, e.g., "2023-01-01" or "2023-01-01T00:00:00Z")
 - `end_date` (string): Filter emails up to this date (ISO 8601 format)
 - `has_attachments` (string): Filter by attachment presence ("true" for emails with attachments, "false" for emails without)
+- `limit` (number): Maximum number of emails to return (default: 50, max: 1000)
+- `offset` (number): Number of emails to skip for pagination (default: 0)
+- `fields` (string): Comma-separated list of fields to return (optional optimization)
 
 #### Examples
 
-**Get all emails:**
+**Get all emails with pagination:**
 ```
-GET /api/emails/all
+GET /api/emails/all?limit=20&offset=0
+```
+
+**Get lightweight summary (faster for listings):**
+```
+GET /api/emails/summary?limit=50&offset=0
 ```
 
 **Filter by sender domain:**
@@ -270,24 +278,30 @@ GET /api/emails/all?has_attachments=true
 GET /api/emails/all?threat_level=high&has_attachments=true&start_date=2023-01-01
 ```
 
+**Selective field retrieval (optimization):**
+```
+GET /api/emails/all?fields=id,sender,subject,timestamp,phishing_score_cti,threat_summary&limit=100
+```
+
 #### Response
 
 **Success Response (200):**
 ```json
-[
-  {
-    "id": 1,
-    "sender": "sender@example.com",
-    "recipient": "recipient@example.com",
-    "subject": "Test Email",
-    "body": "Email body content...",
-    "attachments": ["document.pdf", "attachment2.jpg"],
-    "timestamp": "2023-01-01T12:00:00.000Z",
-    "phishing_score_cti": 0.85,
-    "cti_flags": ["suspicious_sender", "malicious_url"],
-    "extracted_urls": ["http://malicious-site.com"],
-    "sender_domain": "example.com",
-    "sender_ip": "192.168.1.1",
+{
+  "emails": [
+    {
+      "id": 1,
+      "sender": "sender@example.com",
+      "recipient": "recipient@example.com",
+      "subject": "Test Email",
+      "body": "Email body content...",
+      "attachments": ["document.pdf", "attachment2.jpg"],
+      "timestamp": "2023-01-01T12:00:00.000Z",
+      "phishing_score_cti": 0.85,
+      "cti_flags": ["suspicious_sender", "malicious_url"],
+      "extracted_urls": ["http://malicious-site.com"],
+      "sender_domain": "example.com",
+      "sender_ip": "192.168.1.1",
     "sender_name": "John Doe",
     "spf_result": "pass",
     "dkim_result": "pass",
@@ -333,7 +347,68 @@ GET /api/emails/all?threat_level=high&has_attachments=true&start_date=2023-01-01
       "average_reputation": 30
     }
   }
-]
+  ],
+  "pagination": {
+    "total": 1250,
+    "limit": 50,
+    "offset": 0,
+    "hasMore": true
+  }
+}
+```
+
+**Error Response (400/500):**
+```json
+{
+  "error": "Limit must be between 1 and 1000",
+  "details": "Pagination parameter validation failed"
+}
+```
+
+---
+
+## GET /api/emails/summary
+
+**Lightweight endpoint for email listings (faster than /all)**
+
+**Query Parameters (same as /all endpoint):**
+- `sender`, `subject`, `sender_domain`, `threat_level`, `cti_confidence`, `start_date`, `end_date`, `has_attachments`
+- `limit` (default: 50, max: 1000)
+- `offset` (default: 0)
+
+#### Example
+
+```
+GET /api/emails/summary?limit=20&threat_level=high
+```
+
+#### Response
+
+**Success Response (200):**
+```json
+{
+  "emails": [
+    {
+      "id": 1,
+      "sender": "sender@example.com",
+      "subject": "Test Email",
+      "timestamp": "2023-01-01T12:00:00.000Z",
+      "phishing_score_cti": 0.85,
+      "threat_summary": {
+        "overall_risk": "high",
+        "confidence": "high"
+      },
+      "cti_confidence": "high",
+      "sender_domain": "example.com"
+    }
+  ],
+  "pagination": {
+    "total": 1250,
+    "limit": 20,
+    "offset": 0,
+    "hasMore": true
+  }
+}
 ```
 
 **Error Response (500):**
@@ -342,6 +417,131 @@ GET /api/emails/all?threat_level=high&has_attachments=true&start_date=2023-01-01
   "error": "Failed to fetch emails"
 }
 ```
+
+---
+
+## GET /api/emails/intelligence
+
+**Aggregated email intelligence data grouped by sender email address**
+
+This endpoint provides computed threat intelligence metrics for each unique sender, including reputation scores, threat levels, malicious engine counts, and activity summaries. It's optimized for dashboard views and sender analysis.
+
+#### Request
+
+```
+GET /api/emails/intelligence
+```
+
+**Query Parameters (all optional):**
+- `sender_domain` (string): Filter by sender domain (exact match)
+- `start_date` (string): Filter senders with emails from this date onwards (ISO 8601 format)
+- `end_date` (string): Filter senders with emails up to this date (ISO 8601 format)
+- `blocked` (string): Filter by blocked status ("all", "blocked", "non-blocked") - default: "all"
+- `limit` (number): Maximum number of senders to return (default: 50, max: 1000)
+- `offset` (number): Number of senders to skip for pagination (default: 0)
+
+#### Examples
+
+**Get all sender intelligence with pagination:**
+```
+GET /api/emails/intelligence?limit=20&offset=0
+```
+
+**Filter by blocked senders only:**
+```
+GET /api/emails/intelligence?blocked=blocked
+```
+
+**Filter by domain and date range:**
+```
+GET /api/emails/intelligence?sender_domain=gmail.com&start_date=2023-01-01
+```
+
+**Get non-blocked senders with high threat levels:**
+```
+GET /api/emails/intelligence?blocked=non-blocked&limit=100
+```
+
+#### Response
+
+**Success Response (200):**
+```json
+{
+  "intelligence": [
+    {
+      "email": "malicious@suspicious-domain.com",
+      "domain": "suspicious-domain.com",
+      "reputation_score": 15,
+      "threat_level": "malicious",
+      "threat_reasons": [
+        "Domain analysis shows high threat level",
+        "IP analysis shows malicious classification"
+      ],
+      "first_seen": "2023-01-01T10:30:00.000Z",
+      "last_seen": "2023-10-25T14:22:00.000Z",
+      "email_count": 45,
+      "malicious_engines": ["engine_1", "engine_2", "engine_3", "engine_4", "engine_5"],
+      "total_engines": 77,
+      "categories": ["phishing", "malware"],
+      "sender_name": "Fake Support",
+      "is_blocked": false
+    },
+    {
+      "email": "legit@trusted-domain.com",
+      "domain": "trusted-domain.com",
+      "reputation_score": 95,
+      "threat_level": "clean",
+      "threat_reasons": [
+        "No significant threats detected"
+      ],
+      "first_seen": "2023-06-15T08:45:00.000Z",
+      "last_seen": "2023-10-24T16:12:00.000Z",
+      "email_count": 12,
+      "malicious_engines": [],
+      "total_engines": 60,
+      "categories": [],
+      "sender_name": "Trusted Company",
+      "is_blocked": false
+    }
+  ],
+  "pagination": {
+    "total": 1250,
+    "limit": 50,
+    "offset": 0,
+    "hasMore": true
+  }
+}
+```
+
+**Field Descriptions:**
+- `email`: Sender email address
+- `domain`: Extracted domain from email
+- `reputation_score`: Calculated reputation (0-100, higher is better) from domain/IP analysis
+- `threat_level`: Overall threat assessment ("clean", "suspicious", "malicious") based on domain and IP analysis
+- `threat_reasons`: Array of strings explaining why this threat level was assigned
+- `first_seen`/`last_seen`: Date range of emails from this sender
+- `email_count`: Total number of emails received from this sender
+- `malicious_engines`: Array representing malicious engine detections from domain/IP analysis
+- `total_engines`: Total number of analysis engines used
+- `categories`: Threat categories identified by CTI from domain and IP analysis
+- `sender_name`: Display name from email headers
+- `is_blocked`: Whether this sender is in the blocked list
+
+**Error Response (400):**
+```json
+{
+  "error": "Blocked filter must be one of: all, blocked, non-blocked"
+}
+```
+
+**Error Response (500):**
+```json
+{
+  "error": "Failed to fetch email intelligence"
+}
+```
+
+---
 
 ### DELETE /emails/:id
 

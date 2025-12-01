@@ -45,6 +45,9 @@ const createTable = async () => {
     `ALTER TABLE emails ADD COLUMN IF NOT EXISTS detailed_cti_analysis JSONB;`,
     `ALTER TABLE emails ADD COLUMN IF NOT EXISTS threat_summary JSONB;`,
     `ALTER TABLE emails ADD COLUMN IF NOT EXISTS cti_confidence VARCHAR(20);`,
+    `ALTER TABLE emails ADD COLUMN IF NOT EXISTS ai_verdict VARCHAR(20);`,
+    `ALTER TABLE emails ADD COLUMN IF NOT EXISTS ai_reasoning TEXT;`,
+    `ALTER TABLE emails ADD COLUMN IF NOT EXISTS urlhaus_analysis JSONB;`,
     `CREATE TABLE IF NOT EXISTS blocked_senders (
       id SERIAL PRIMARY KEY,
       sender_email VARCHAR(255) UNIQUE NOT NULL,
@@ -74,8 +77,8 @@ const createTable = async () => {
 // Save email data
 const saveEmail = async (emailData) => {
   const query = `
-    INSERT INTO emails (sender, recipient, subject, body, attachments, timestamp, phishing_score_cti, cti_flags, extracted_urls, sender_domain, sender_ip, sender_name, spf_result, dkim_result, dmarc_result, headers, attachment_hashes, detailed_cti_analysis, threat_summary, cti_confidence)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+    INSERT INTO emails (sender, recipient, subject, body, attachments, timestamp, phishing_score_cti, cti_flags, extracted_urls, sender_domain, sender_ip, sender_name, spf_result, dkim_result, dmarc_result, headers, attachment_hashes, detailed_cti_analysis, threat_summary, cti_confidence, ai_verdict, ai_reasoning, urlhaus_analysis)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
     RETURNING id;
   `;
   const values = [
@@ -85,8 +88,8 @@ const saveEmail = async (emailData) => {
     emailData.body,
     JSON.stringify(emailData.attachments),
     emailData.timestamp,
-    emailData.phishing_score_cti,
-    JSON.stringify(emailData.cti_flags),
+    emailData.phishing_score_cti || null,
+    JSON.stringify(emailData.cti_flags || []),
     JSON.stringify(emailData.extracted_urls),
     emailData.sender_domain,
     emailData.sender_ip,
@@ -98,7 +101,10 @@ const saveEmail = async (emailData) => {
     JSON.stringify(emailData.attachment_hashes),
     JSON.stringify(emailData.detailed_analysis || {}),
     JSON.stringify(emailData.threat_summary || {}),
-    emailData.threat_summary?.confidence || 'unknown'
+    emailData.threat_summary?.confidence || 'unknown',
+    emailData.ai_verdict,
+    emailData.ai_reasoning,
+    JSON.stringify(emailData.urlhaus_analysis || {})
   ];
   try {
     const res = await pool.query(query, values);
@@ -119,7 +125,8 @@ const getEmails = async (filters = {}, options = {}) => {
     'id', 'sender', 'recipient', 'subject', 'body', 'attachments', 'timestamp',
     'phishing_score_cti', 'cti_flags', 'extracted_urls', 'sender_domain',
     'sender_ip', 'sender_name', 'spf_result', 'dkim_result', 'dmarc_result',
-    'headers', 'attachment_hashes', 'detailed_cti_analysis', 'threat_summary', 'cti_confidence'
+    'headers', 'attachment_hashes', 'detailed_cti_analysis', 'threat_summary', 'cti_confidence',
+    'ai_verdict', 'ai_reasoning', 'urlhaus_analysis'
   ];
 
   // Use selective fields if specified, otherwise use all fields
@@ -303,6 +310,17 @@ const getEmails = async (filters = {}, options = {}) => {
             threat_summary = {};
           }
           result.threat_summary = threat_summary;
+        }
+
+        if (selectFields.includes('urlhaus_analysis')) {
+          let urlhaus_analysis = {};
+          try {
+            urlhaus_analysis = typeof row.urlhaus_analysis === 'string' ? JSON.parse(row.urlhaus_analysis) : (row.urlhaus_analysis || {});
+          } catch (e) {
+            console.warn('Failed to parse urlhaus_analysis for email ID:', row.id, e);
+            urlhaus_analysis = {};
+          }
+          result.urlhaus_analysis = urlhaus_analysis;
         }
 
         return result;

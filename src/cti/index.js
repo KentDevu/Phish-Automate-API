@@ -1,4 +1,12 @@
 const axios = require('axios');
+const Groq = require('groq-sdk');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
+
+const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY,
+});
+
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
 /**
  * Extracts domain from email address
@@ -349,37 +357,94 @@ async function checkCTI(emailData) {
     }
   }
 
-  // Calculate final summary metrics
-  if (detailedResults.summary.total_checks > 0) {
-    detailedResults.summary.reputation_score = Math.round(
-      detailedResults.summary.reputation_score / detailedResults.summary.total_checks
-    );
-  }
-
-  // Determine overall confidence level
-  if (detailedResults.summary.malicious_detections >= 2) {
-    detailedResults.summary.confidence_level = 'high';
-  } else if (detailedResults.summary.malicious_detections >= 1 || detailedResults.summary.suspicious_detections >= 3) {
-    detailedResults.summary.confidence_level = 'medium';
-  } else if (detailedResults.summary.suspicious_detections >= 1) {
-    detailedResults.summary.confidence_level = 'low';
-  }
-
-  // Cap score at 1.0
-  score = Math.min(score, 1.0);
-
-  return {
-    phishing_score_cti: score,
-    cti_flags: flags,
-    detailed_analysis: detailedResults,
-    threat_summary: {
-      overall_risk: score >= 0.7 ? 'high' : score >= 0.4 ? 'medium' : 'low',
-      confidence: detailedResults.summary.confidence_level,
-      total_analyzed: detailedResults.summary.total_checks,
-      malicious_found: detailedResults.summary.malicious_detections,
-      suspicious_found: detailedResults.summary.suspicious_detections,
-      average_reputation: detailedResults.summary.reputation_score
+  // Check URLs with URLhaus
+  const urlhausResults = {};
+  for (const url of urls) {
+    try {
+      const response = await axios.post('https://urlhaus-api.abuse.ch/v1/url/', `url=${encodeURIComponent(url)}`, {
+        headers: {
+          'Auth-Key': process.env.URLHAUS_AUTH_KEY,
+          'Content-Type': 'application/x-www-form-urlencoded'
+        }
+      });
+      urlhausResults[url] = response.data;
+    } catch (error) {
+      console.error('URLhaus error for', url, ':', error.message);
+      urlhausResults[url] = { query_status: 'error', error: error.message };
     }
+  }
+
+  // AI Analysis
+  const bodySnippet = emailData.body.substring(0, 1000) + (emailData.body.length > 1000 ? '...' : '');
+  const headersSnippet = JSON.stringify(emailData.headers).substring(0, 500) + (JSON.stringify(emailData.headers).length > 500 ? '...' : '');
+  const prompt = `
+You are an expert in cybersecurity, specializing in phishing detection. Analyze the following email data and threat intelligence to determine if the email is phishing or legitimate.
+
+Email Details:
+- Sender: ${emailData.sender}
+- Subject: ${emailData.subject || 'No subject'}
+- Body (snippet): ${bodySnippet}
+- Headers (snippet): ${headersSnippet}
+
+Threat Intelligence Summary:
+- VirusTotal: Domains checked: ${Object.keys(detailedResults.domains).length}, IPs checked: ${Object.keys(detailedResults.ips).length}, Total malicious detections: ${detailedResults.summary.malicious_detections}, Suspicious: ${detailedResults.summary.suspicious_detections}, Overall reputation score: ${detailedResults.summary.reputation_score}
+- URLhaus: URLs checked: ${Object.keys(urlhausResults).length}, Results: ${Object.values(urlhausResults).map(r => r.query_status).join(', ')}
+
+Detailed Threat Intelligence Data (for reference):
+VirusTotal Analysis: ${JSON.stringify(detailedResults)}
+URLhaus Analysis: ${JSON.stringify(urlhausResults)}
+
+Based on this information, provide a verdict: either "phishing" or "legitimate".
+Also, provide a detailed reasoning explaining your decision, citing specific evidence from the data.
+
+Format your response as:
+Verdict: [phishing or legitimate]
+Reasoning: [detailed explanation]
+  `;
+  console.log('AI Prompt:', prompt);
+  let aiText;
+  try {
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
+    const result = await model.generateContent(prompt);
+    aiText = result.response.text();
+  } catch (geminiError) {
+    console.log('Gemini failed, trying Groq:', geminiError.message);
+    try {
+      const aiResponse = await groq.chat.completions.create({
+        messages: [{ role: 'user', content: prompt }],
+        model: 'llama-3.1-8b-instant',
+      });
+      aiText = aiResponse.choices[0].message.content;
+    } catch (groqError) {
+      console.error('Both AI services failed. Gemini:', geminiError.message, 'Groq:', groqError.message);
+      return {
+        ai_verdict: 'error',
+        ai_reasoning: 'Failed to analyze with AI: Gemini - ' + geminiError.message + ', Groq - ' + groqError.message,
+        detailed_analysis: detailedResults,
+        urlhaus_analysis: urlhausResults
+      };
+    }
+  }
+  // Parse verdict and reasoning
+  console.log('AI Response:', aiText);
+  const verdictMatch = aiText.match(/Verdict:\s*(phishing|legitimate)/i);
+  const reasoningMatch = aiText.match(/Reasoning:\s*(.+)/is);
+  const verdict = verdictMatch ? verdictMatch[1].toLowerCase() : 'unknown';
+  let reasoning = reasoningMatch ? reasoningMatch[1].trim() : aiText;
+  // Clean up reasoning: remove Markdown formatting
+  reasoning = reasoning
+    .replace(/^\s*[\*\-\+]\s*/gm, '') // Remove bullet points
+    .replace(/\*\*/g, '') // Remove bold
+    .replace(/\*/g, '') // Remove any remaining asterisks
+    .replace(/\n\s*\n/g, '\n') // Remove extra newlines
+    .trim();
+  console.log('Cleaned Reasoning:', reasoning);
+  console.log('Parsed AI Response:', { ai_verdict: verdict, ai_reasoning: reasoning });
+  return {
+    ai_verdict: verdict,
+    ai_reasoning: reasoning,
+    detailed_analysis: detailedResults,
+    urlhaus_analysis: urlhausResults
   };
 }
 
